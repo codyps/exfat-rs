@@ -1,0 +1,10 @@
+[package]
+name = "exfat"
+version = "0.1.0"
+authors = ["Cody P Schafer <dev@codyps.com>"]
+include = [ "Cargo.toml", "**/*.rs"]
+license = "GPL-3"
+description = "exFAT filesystem reader & writer"
+
+[dependencies]
+io-at = "*"
