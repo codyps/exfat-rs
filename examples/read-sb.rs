@@ -1,19 +1,20 @@
 extern crate exfat;
 extern crate clap;
+extern crate fmt_extra;
+use ::fmt_extra::AsciiStr;
 use ::clap::{Arg, App, SubCommand};
 use ::std::path::Path;
 
 #[derive(Debug)]
 enum SbOpenError {
-    Io(::std::io::Error),
+    Open(::std::io::Error),
     Sb(::exfat::SbInitIoError)
 }
 
 fn sb_from_file<P: AsRef<Path>>(path: P) -> Result<exfat::Sb, SbOpenError> {
     let f = try!(::std::fs::File::open(path)
-                 .map_err(|e| SbOpenError::Io(e)));
-
-    exfat::Sb::read_at_from(&f, 512).map_err(|e| SbOpenError::Sb(e))
+                 .map_err(|e| SbOpenError::Open(e)));
+    exfat::Sb::read_at_from(&f, 0).map_err(|e| SbOpenError::Sb(e))
 }
 
 fn main() {
@@ -35,7 +36,30 @@ fn main() {
     let f = matches.value_of("file").unwrap();
     println!("reading from file {}", f);
 
-    let sb = sb_from_file(f).unwrap();
 
-    println!("read superblock");
+    let sb = match sb_from_file(f) {
+        Err(e) => {
+            println!("Failed to read sb: {:?}", e);
+            ::std::process::exit(1);
+        },
+        Ok(v) => v,
+    };
+
+    println!("magic: {}", AsciiStr(sb.magic()));
+    println!("partition offset: {}", sb.partition_offs());
+    println!("volume length: {}", sb.volume_len());
+    println!("fat offset: {}", sb.fat_offs());
+    println!("fat len: {}", sb.fat_len());
+    println!("cluster heap offset: {}", sb.cluster_heap_offs());
+    println!("cluster count: {}", sb.cluster_count());
+    println!("first cluster of root directory: {}", sb.first_cluster_of_root_dir());
+    println!("volume serial number: {}", sb.volume_serial_num());
+    println!("file system revision: {}", sb.file_system_rev());
+    println!("volume flags: {}", sb.volume_flags());
+    println!("bytes per sector shift: {}", sb.bytes_per_sector_shift());
+    println!("sectors per cluster shift: {}", sb.sectors_per_cluster_shift());
+    println!("number of fats: {}", sb.number_of_fats());
+    println!("drive select: {}", sb.drive_select());
+    println!("percent in use: {}", sb.percent_in_use());
+    
 }

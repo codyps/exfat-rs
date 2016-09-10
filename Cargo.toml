@@ -6,5 +6,11 @@ include = [ "Cargo.toml", "**/*.rs"]
 license = "GPL-3"
 description = "exFAT filesystem reader & writer"
 
+[dev-dependencies]
+clap = "*"
+
 [dependencies]
 io-at = "*"
+index-fixed = "*"
+fmt-extra = "*"
+io-block = "*"
