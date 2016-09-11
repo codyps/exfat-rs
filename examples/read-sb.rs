@@ -1,7 +1,7 @@
 extern crate exfat;
 extern crate clap;
 extern crate fmt_extra;
-use ::fmt_extra::AsciiStr;
+use ::fmt_extra::{AsciiStr,Hs};
 use ::clap::{Arg, App, SubCommand};
 use ::std::path::Path;
 
@@ -45,6 +45,7 @@ fn main() {
         Ok(v) => v,
     };
 
+    println!("jump boot: {}", Hs(sb.jump_boot()));
     println!("magic: {}", AsciiStr(sb.magic()));
     println!("partition offset: {}", sb.partition_offs());
     println!("volume length: {}", sb.volume_len());
@@ -57,9 +58,11 @@ fn main() {
     println!("file system revision: {}", sb.file_system_rev());
     println!("volume flags: {}", sb.volume_flags());
     println!("bytes per sector shift: {}", sb.bytes_per_sector_shift());
+    println!(" \\ bytes per sector: {}", 1<<sb.bytes_per_sector_shift());
     println!("sectors per cluster shift: {}", sb.sectors_per_cluster_shift());
+    println!(" \\ sectors per cluster: {}", 1<<sb.sectors_per_cluster_shift());
     println!("number of fats: {}", sb.number_of_fats());
     println!("drive select: {}", sb.drive_select());
     println!("percent in use: {}", sb.percent_in_use());
-    
+    println!("boot signature: {}", Hs(sb.boot_signature()));
 }
