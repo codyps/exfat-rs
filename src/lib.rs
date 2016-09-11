@@ -5,6 +5,9 @@
  *
  * A cluster contains a fixed number (per-exfat volume, power of 2) of sectors.
  *
+ * The FAT is an array of u32 entires, with each describing a cluster.
+ *
+ * Using FAT entries as "next pointers", the clusters are formed into chains.
  *
  * General layout:
  *
@@ -39,19 +42,20 @@ extern crate core;
 
 use ::io_at::{ReadAt,WriteAt};
 use ::std::io::Read;
+use ::std::ops::Index;
 use ::fmt_extra::AsciiStr;
 
 #[derive(Debug)]
-pub enum SbInitError {
+pub enum BootSectorInitError {
     BadMagic(AsciiStr<[u8;8]>),
     MustBeZeroNonZero,
     FatOffsTooSmall(u32)
 }
 
 #[derive(Debug)]
-pub enum SbInitIoError {
+pub enum BootSectorInitIoError {
     Io(::std::io::Error),
-    Init(SbInitError)
+    Init(BootSectorInitError)
 }
 
 macro_rules! read_num_bytes {
@@ -70,41 +74,49 @@ macro_rules! read_num_bytes {
 }
 
 /**
- * An Exfat superblock. Sometimes refered to as a "boot sector".
+ * An Exfat superblock. Sometimes refered to as a "boot sector". Contains all the essential items
+ * for recognizing and using the filesystem.
+ *
+ * We store the entire thing is it's very likely that we'll need to "write-back" the entire sector
+ * if anything changes (as block devices don't have byte-level access)
+ *
+ * As an alternative, it might make sense to construct this from any AsRef<[u8]> which can promise
+ * it's long enough.
  */
-pub struct Sb {
-    raw: [u8;512 * 12],
+pub struct BootSector {
+    raw: [u8;512],
 }
 
-impl Sb {
+impl BootSector {
     /*
      * FIXME: we really need a unification of ReadAt and Read here: as we're only doing a single
      * call (and don't care where the cursor ends up), it'd be nice to allow either
      */
     /// Populate with a superblock from this `ReadAt`able thing, at a given offset
-    pub fn read_at_from<R: ReadAt>(s: R, offs: u64) -> Result<Self, SbInitIoError> {
-        let mut sb = unsafe { Sb { raw: ::std::mem::uninitialized() } };
+    pub fn read_at_from<R: ReadAt>(s: R, offs: u64) -> Result<Self, BootSectorInitIoError> {
+        let mut sb = unsafe { BootSector { raw: ::std::mem::uninitialized() } };
         /*
          * FIXME: ReadAt does not promise that this returns all the data requested. Add a wrapper
          * here or in io-at
          */
-        try!(s.read_at(&mut sb.raw, offs).map_err(|e| SbInitIoError::Io(e)));
-        sb.validate().map_err(|e| SbInitIoError::Init(e))
+        try!(s.read_at(&mut sb.raw, offs).map_err(|e| BootSectorInitIoError::Io(e)));
+        sb.validate().map_err(|e| BootSectorInitIoError::Init(e))
     }
 
     /// Populate with a superblock from this `Read`able thing, at it's current offset
-    pub fn read_from<R: Read>(mut s: R) -> Result<Self, SbInitIoError> {
-        let mut sb = unsafe { Sb { raw: ::std::mem::uninitialized() } };
-        try!(s.read_exact(&mut sb.raw).map_err(|e| SbInitIoError::Io(e)));
-        sb.validate().map_err(|e| SbInitIoError::Init(e))
+    pub fn read_from<R: Read>(mut s: R) -> Result<Self, BootSectorInitIoError> {
+        let mut sb = unsafe { BootSector { raw: ::std::mem::uninitialized() } };
+        try!(s.read_exact(&mut sb.raw).map_err(|e| BootSectorInitIoError::Io(e)));
+        sb.validate().map_err(|e| BootSectorInitIoError::Init(e))
     }
 
-    pub fn from(s: [u8;512 * 12]) -> Result<Self, SbInitError> {
-        /* validate Sb */
-        Sb { raw: s }.validate()
+    /// Create from the exact amount of data needed
+    pub fn from(s: [u8;512]) -> Result<Self, BootSectorInitError> {
+        /* validate BootSector */
+        BootSector { raw: s }.validate()
     }
 
-    pub fn raw(&self) -> &[u8;512 * 12] {
+    pub fn raw(&self) -> &[u8;512] {
         &self.raw
     }
 
@@ -307,13 +319,13 @@ impl Sb {
         index_fixed!(&self.raw(); 510, .. (510+2))
     }
 
-    fn validate(self) -> Result<Self, SbInitError> {
+    fn validate(self) -> Result<Self, BootSectorInitError> {
         /* 0,1,2: jmp junk */
         /* 3-11: "EXFAT" */
         {
             let magic = self.magic();
             if magic != b"EXFAT   " {
-                return Err(SbInitError::BadMagic(AsciiStr(magic.clone())))
+                return Err(BootSectorInitError::BadMagic(AsciiStr(magic.clone())))
             }
         }
 
@@ -322,13 +334,13 @@ impl Sb {
             let z = &self.raw()[11..(11+53)];
             for b in z {
                 if *b != 0 {
-                    return Err(SbInitError::MustBeZeroNonZero);
+                    return Err(BootSectorInitError::MustBeZeroNonZero);
                 }
             }
         }
 
         if self.fat_offs() < 24 {
-            return Err(SbInitError::FatOffsTooSmall(self.fat_offs()));
+            return Err(BootSectorInitError::FatOffsTooSmall(self.fat_offs()));
         }
 
         {
@@ -347,25 +359,147 @@ impl Sb {
     }
 }
 
-pub enum ExfatInitError {
-    SbInitError(SbInitError)
+/**
+ * After an exFAT bootsector, there are 8 extended boot sectors.
+ *
+ * These are intended to carry extra boot code.
+ *
+ * These can be marked with 0xAA550000 to indicate that they are, in fact, extended boot sectors.
+ *
+ * The purpose of marking is unclear, as is what the data represents in the case where they are
+ * unmarked.
+ */
+struct ExtendedBootSector<T> {
+    s: T,
+    bytes_per_sector_shift: u8,
 }
 
-pub struct Exfat<S: ReadAt> {
+impl<T: AsRef<[u8]>> ExtendedBootSector<T> {
+    pub fn from(s: T, bytes_per_sector_shift: u8) -> Self {
+        /* TODO: split the "kind" out early? Or late?
+         * Perhaps an enum is appropriate here?
+         */
+        ExtendedBootSector { s: s, bytes_per_sector_shift: bytes_per_sector_shift }
+    }
+
+    pub fn raw(&self) -> &[u8] {
+        self.s.as_ref()
+    }
+
+    pub fn signature(&self) -> u32 {
+        let offs = 1 << self.bytes_per_sector_shift - 4;
+        read_num_bytes!(u32, 4, &self.raw()[offs..])
+    }
+
+    pub fn is_extended_boot_sector(&self) -> bool {
+        self.signature() == 0xAA_55_00_00
+    }
+}
+
+struct ExtendedBootSectors;
+
+struct OemParameter {
+    raw: [u8;48],
+}
+
+impl OemParameter {
+    pub fn is_used(&self) -> bool {
+        for i in self.uuid() {
+            if *i != 0 {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    pub fn uuid(&self) -> &[u8;16] {
+        index_fixed!(&self.raw; 0, .. 16)
+    }
+
+    pub fn data(&self) -> &[u8;32] {
+        index_fixed!(&self.raw; 16, .. 48)
+    }
+}
+
+struct OemParameters<T> {
+    s: T,
+}
+
+impl<S: AsRef<[u8]>> OemParameters<S> {
+    pub fn from(s: S) -> Self {
+        OemParameters { s: s }
+    }
+
+    pub fn raw(&self) -> &[u8] {
+        self.s.as_ref()
+    }
+
+    pub fn all(&self) -> &[OemParameter;10] {
+        unsafe {
+            ::std::mem::transmute::<*const u8, &[OemParameter;10]>
+                (self.raw().as_ptr())
+        }
+    }
+}
+
+pub enum FsInitError {
+    BootSectorInitError(BootSectorInitIoError)
+}
+
+pub struct Fs<S: ReadAt> {
+    bs: BootSector,
     store: S
 }
 
-impl<S: ReadAt> Exfat<S> {
-    pub fn new_ro(t: S) -> Result<Self, ExfatInitError> {
-        Ok(Exfat { store: t })
+impl<S: ReadAt> Fs<S> {
+    pub fn from_ro(t: S) -> Result<Self, FsInitError> {
+        let bs = try!(BootSector::read_at_from(&t, 0).map_err(|e| FsInitError::BootSectorInitError(e)));
+        Ok(Fs { bs: bs, store: t })
     }
 
-    pub fn new_rw(t: S) -> Result<Self, ExfatInitError>
-        where S: WriteAt
-    {
-        Ok(Exfat { store: t })
+    pub fn boot_sector(&self) -> &BootSector {
+        &self.bs
     }
+
+    /*
+    pub fn ext_boot_sectors(&self) -> &ExtendedBootSectors {
+        /* do something?? */
+    }
+    */
+
+    /*
+    pub fn oem_parameters(&self) -> OemParameters {
+
+    }
+    */
 }
+
+/// The FAT (file allocation table) contains a contiguous series of FAT entries.
+///
+/// Each FAT entry is 4 bytes.
+///
+/// Some FAT entries are special:
+///
+/// 0: 0xFF_FF_FF_F8 (f8 indicates "media type")
+/// 1: 0xFF_FF_FF_FF ("nothing of interest")
+///
+/// 2...(cluster_count + 1) : each describe a cluster in the cluster heap
+///
+/// Values for FAT entires:
+///  2...(cluster_count+1): fat entry of the next cluster in the cluster chain
+///  0xFF_FF_FF_F7: bad cluster
+///  0xFF_FF_FF_FF: last cluster in the cluster chain
+pub struct Fat {
+    v: Vec<u32>
+}
+
+
+/*
+pub struct Dir {
+
+}
+*/
 
 #[cfg(test)]
 mod tests {

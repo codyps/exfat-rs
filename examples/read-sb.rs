@@ -6,15 +6,15 @@ use ::clap::{Arg, App, SubCommand};
 use ::std::path::Path;
 
 #[derive(Debug)]
-enum SbOpenError {
+enum BootSectorOpenError {
     Open(::std::io::Error),
-    Sb(::exfat::SbInitIoError)
+    BootSector(::exfat::BootSectorInitIoError)
 }
 
-fn sb_from_file<P: AsRef<Path>>(path: P) -> Result<exfat::Sb, SbOpenError> {
+fn bs_from_file<P: AsRef<Path>>(path: P) -> Result<exfat::BootSector, BootSectorOpenError> {
     let f = try!(::std::fs::File::open(path)
-                 .map_err(|e| SbOpenError::Open(e)));
-    exfat::Sb::read_at_from(&f, 0).map_err(|e| SbOpenError::Sb(e))
+                 .map_err(|e| BootSectorOpenError::Open(e)));
+    exfat::BootSector::read_at_from(&f, 0).map_err(|e| BootSectorOpenError::BootSector(e))
 }
 
 fn main() {
@@ -37,7 +37,7 @@ fn main() {
     println!("reading from file {}", f);
 
 
-    let sb = match sb_from_file(f) {
+    let bs = match bs_from_file(f) {
         Err(e) => {
             println!("Failed to read sb: {:?}", e);
             ::std::process::exit(1);
