@@ -9,6 +9,11 @@
  *
  * Using FAT entries as "next pointers", the clusters are formed into chains.
  *
+ * The "cluster heap" is basically the entire remainder of the storage volume (after the boot
+ * sector and FAT).
+ *
+ * Directory & File data is stored in the cluster heap.
+ *
  * General layout:
  *
  *                       |offs| size (sectors)
@@ -494,12 +499,90 @@ pub struct Fat {
     v: Vec<u32>
 }
 
+impl Fat {
+    pub fn read_at_from<T: ReadAt>(s: T, offs: u64, len: u64) -> ::io_at::Result<Self> {
+        let e = len / 4;
+        if (len % 4) != 0 {
+            panic!("FAT length must be a multiple of 4");
+        }
+
+        let f = Fat { v: Vec::with_capacitry(e) };
+        unsafe { f.v.set_len(e) }
+        try!(s.read_at(f.v.as_mut_slice(), offs));
+        f
+    }
+
+    pub fn media_type(&self) -> u8 {
+        self.v[0] & 0xff;
+    }
+
+    pub fn cluster_ct(&self) -> u32 {
+        self.v.len()  / 4 - 2
+    }
+}
+
+impl Index<usize> for Fat {
+    type Target = FatEntry
+
+    fn index(&self, i: usize) -> FatEntry {
+        FatEntry::from_index(self.v[2 + i])
+    }
+}
+
+pub struct FatEntry {
+    v: u32
+}
+
+impl FatEntry {
+    pub fn from_val(i: u32) -> Self {
+        FatEntry { v: i }
+    }
+
+    pub fn is_bad(&self) -> bool {
+        self.v == 0xFF_FF_FF_F7
+    }
+
+    pub fn val(&self) -> u32 {
+        self.v
+    }
+}
 
 /*
-pub struct Dir {
-
+/// An array of Cluster fields, each being of cluster size (ie: 2**sectors_per_cluster_shift
+/// sectors)
+pub struct ClusterHeap {
 }
 */
+
+/// A series of `DirectoryEntry`s stored in a cluster chain
+///
+/// Each entry is 32 bytes
+pub struct Dir {
+}
+
+pub struct DirEntry {
+    v: [u8;32],
+}
+
+impl DirEntry {
+    /// 0x00 = end-of-directory, all other fields reserved
+    ///        subsequent DirEntries in a Dir are also given this type
+    pub fn entry_type(&self) -> u8 {
+        self.v[0]
+    }
+
+    pub fn custom_defined(&self) -> &[u8;19] {
+        index_fixed!(&self; 1, .. 19)
+    }
+
+    pub fn first_cluster(&self) -> u32 {
+        read_num_bytes!(u32, 4, &self.v[20..])
+    }
+
+    pub fn data_len(&self) -> u64 {
+        read_num_bytes!(u64, 8, &self.v[24..])
+    }
+}
 
 #[cfg(test)]
 mod tests {
