@@ -49,6 +49,7 @@ use ::io_at::{ReadAt,WriteAt};
 use ::std::io::Read;
 use ::std::ops::Index;
 use ::fmt_extra::AsciiStr;
+use ::std::{mem,slice};
 
 #[derive(Debug)]
 pub enum BootSectorInitError {
@@ -499,17 +500,33 @@ pub struct Fat {
     v: Vec<u32>
 }
 
+unsafe fn as_mut_bytes(v: &mut [u32]) -> &mut [u8] {
+    slice::from_raw_parts_mut(mem::transmute::<*mut u32, *mut u8>(v.as_mut_ptr()), v.len() * mem::size_of::<u32>())
+}
+
 impl Fat {
-    pub fn read_at_from<T: ReadAt>(s: T, offs: u64, len: u64) -> ::io_at::Result<Self> {
+    /* XXX: len must fit in memory, so it is constrained to usize.  Consider what limit exFAT
+     * places on the size of the FAT in bytes.
+     *
+     * Due to each entry being an index & sized at 4 bytes:
+     *      (u32::MAX) * 4
+     *
+     * There are a few "invalid values" that limit the size a bit as well.
+     */
+    pub fn read_at_from<T: ReadAt>(s: T, offs: u64, len: usize) -> ::io_at::Result<Self> {
         let e = len / 4;
         if (len % 4) != 0 {
             panic!("FAT length must be a multiple of 4");
         }
 
-        let f = Fat { v: Vec::with_capacitry(e) };
+        let f = Fat { v: Vec::with_capacity(e) };
         unsafe { f.v.set_len(e) }
-        try!(s.read_at(f.v.as_mut_slice(), offs));
-        f
+        try!(s.read_at(
+            unsafe {
+                as_mut_bytes(f.v.as_mut_slice())
+            }, offs)
+        );
+        Ok(f)
     }
 
     pub fn media_type(&self) -> u8 {
@@ -517,15 +534,15 @@ impl Fat {
     }
 
     pub fn cluster_ct(&self) -> u32 {
-        self.v.len()  / 4 - 2
+        self.v.len() as u32 / 4 - 2
     }
 }
 
 impl Index<usize> for Fat {
-    type Target = FatEntry
+    type Output = FatEntry;
 
-    fn index(&self, i: usize) -> FatEntry {
-        FatEntry::from_index(self.v[2 + i])
+    fn index(&self, i: usize) -> &FatEntry {
+        FatEntry::from_val(self.v[2 + i])
     }
 }
 
