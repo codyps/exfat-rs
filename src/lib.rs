@@ -16,7 +16,7 @@
  *
  * General layout:
  *
- *                       |offs| size (sectors)
+ * .                     |offs| size (sectors)
  * boot sector (aka sb)  | 0  | 1
  * extended boot sectors | 1  | 8
  * oem parameters        | 9  | 1
@@ -519,7 +519,7 @@ impl Fat {
             panic!("FAT length must be a multiple of 4");
         }
 
-        let f = Fat { v: Vec::with_capacity(e) };
+        let mut f = Fat { v: Vec::with_capacity(e) };
         unsafe { f.v.set_len(e) }
         try!(s.read_at(
             unsafe {
@@ -530,18 +530,15 @@ impl Fat {
     }
 
     pub fn media_type(&self) -> u8 {
-        self.v[0] & 0xff;
+        (self.v[0] & 0xff) as u8
     }
 
     pub fn cluster_ct(&self) -> u32 {
         self.v.len() as u32 / 4 - 2
     }
-}
 
-impl Index<usize> for Fat {
-    type Output = FatEntry;
-
-    fn index(&self, i: usize) -> &FatEntry {
+    // TODO: consider if we can get Index to work here by abusing a '&' type.
+    pub fn entry(&self, i: usize) -> FatEntry {
         FatEntry::from_val(self.v[2 + i])
     }
 }
@@ -589,7 +586,7 @@ impl DirEntry {
     }
 
     pub fn custom_defined(&self) -> &[u8;19] {
-        index_fixed!(&self; 1, .. 19)
+        index_fixed!(&self.v; 1, ... 19)
     }
 
     pub fn first_cluster(&self) -> u32 {

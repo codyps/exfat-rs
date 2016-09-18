@@ -18,9 +18,8 @@ fn bs_from_file<P: AsRef<Path>>(path: P) -> Result<exfat::BootSector, BootSector
 }
 
 fn main() {
-    let matches = App::new("exfat-read-sb")
+    let matches = App::new("dumpexfat")
         .arg(Arg::with_name("file")
-             .short("f")
              .value_name("DISK-IMAGE")
              .help("read the super block from this file")
              .required(true)
@@ -39,30 +38,30 @@ fn main() {
 
     let bs = match bs_from_file(f) {
         Err(e) => {
-            println!("Failed to read sb: {:?}", e);
+            println!("Failed to read bs: {:?}", e);
             ::std::process::exit(1);
         },
         Ok(v) => v,
     };
 
-    println!("jump boot: {}", Hs(sb.jump_boot()));
-    println!("magic: {}", AsciiStr(sb.magic()));
-    println!("partition offset: {}", sb.partition_offs());
-    println!("volume length: {}", sb.volume_len());
-    println!("fat offset: {}", sb.fat_offs());
-    println!("fat len: {}", sb.fat_len());
-    println!("cluster heap offset: {}", sb.cluster_heap_offs());
-    println!("cluster count: {}", sb.cluster_count());
-    println!("first cluster of root directory: {}", sb.first_cluster_of_root_dir());
-    println!("volume serial number: {}", sb.volume_serial_num());
-    println!("file system revision: {}", sb.file_system_rev());
-    println!("volume flags: {}", sb.volume_flags());
-    println!("bytes per sector shift: {}", sb.bytes_per_sector_shift());
-    println!(" \\ bytes per sector: {}", 1<<sb.bytes_per_sector_shift());
-    println!("sectors per cluster shift: {}", sb.sectors_per_cluster_shift());
-    println!(" \\ sectors per cluster: {}", 1<<sb.sectors_per_cluster_shift());
-    println!("number of fats: {}", sb.number_of_fats());
-    println!("drive select: {}", sb.drive_select());
-    println!("percent in use: {}", sb.percent_in_use());
-    println!("boot signature: {}", Hs(sb.boot_signature()));
+    println!("jump boot: {}", Hs(bs.jump_boot()));
+    println!("magic: {}", AsciiStr(bs.magic()));
+    println!("partition offset: {}", bs.partition_offs());
+    println!("volume length: {}", bs.volume_len());
+    println!("fat offset: {}", bs.fat_offs());
+    println!("fat len: {}", bs.fat_len());
+    println!("cluster heap offset: {}", bs.cluster_heap_offs());
+    println!("cluster count: {}", bs.cluster_count());
+    println!("first cluster of root directory: {}", bs.first_cluster_of_root_dir());
+    println!("volume serial number: {}", bs.volume_serial_num());
+    println!("file system revision: {}", bs.file_system_rev());
+    println!("volume flags: {}", bs.volume_flags());
+    println!("bytes per sector shift: {}", bs.bytes_per_sector_shift());
+    println!(" \\ bytes per sector: {}", 1<<bs.bytes_per_sector_shift());
+    println!("sectors per cluster shift: {}", bs.sectors_per_cluster_shift());
+    println!(" \\ sectors per cluster: {}", 1<<bs.sectors_per_cluster_shift());
+    println!("number of fats: {}", bs.number_of_fats());
+    println!("drive select: {}", bs.drive_select());
+    println!("percent in use: {}", bs.percent_in_use());
+    println!("boot signature: {}", Hs(bs.boot_signature()));
 }
