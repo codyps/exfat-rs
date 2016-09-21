@@ -375,13 +375,14 @@ impl BootSector {
  * The purpose of marking is unclear, as is what the data represents in the case where they are
  * unmarked.
  */
-struct ExtendedBootSector<T> {
-    s: T,
+#[derive(Clone,Debug)]
+struct ExtendedBootSector {
+    s: Vec<u8>,
     bytes_per_sector_shift: u8,
 }
 
-impl<T: AsRef<[u8]>> ExtendedBootSector<T> {
-    pub fn from(s: T, bytes_per_sector_shift: u8) -> Self {
+impl ExtendedBootSector {
+    pub fn from(s: Vec<u8>, bytes_per_sector_shift: u8) -> Self {
         /* TODO: split the "kind" out early? Or late?
          * Perhaps an enum is appropriate here?
          */
@@ -428,12 +429,17 @@ impl OemParameter {
     }
 }
 
-struct OemParameters<T> {
-    s: T,
+/// The boot record contains a sector containing oem parameters
+struct OemParameters {
+    s: Vec<u8>,
 }
 
-impl<S: AsRef<[u8]>> OemParameters<S> {
-    pub fn from(s: S) -> Self {
+impl OemParameters {
+    pub fn read_at_from<S: ReadAt>(s: S) -> io_at::Result<Self> {
+        s::
+    }
+
+    pub fn from(s: Vec<u8>) -> Self {
         OemParameters { s: s }
     }
 
@@ -453,30 +459,63 @@ pub enum FsInitError {
     BootSectorInitError(BootSectorInitIoError)
 }
 
-pub struct Fs<S: ReadAt> {
+#[derive(Debug, Clone)]
+pub struct BootRegion {
     bs: BootSector,
-    store: S
+    // ebs: ExtendedBootSectors,
+    oem: OemParameters,
+}
+
+impl BootRegion {
+    /*
+     * TODO: consider using io_at::At adaptor instead of passing `offs` around manually.
+     */
+    pub fn read_at_from<S: ReadAt>(t: S, offs: u64) -> Result<Self, BootSectorInitIoError> {
+        let bs = try!(BootSector::read_at_from(&t, offs).map_err(|e| FsInitError::BootSectorInitError(e)));
+        /*
+         * FIXME: instead of using '512' here, we need to either use the bootsector's sector side
+         * or query the store for the underlying sector size
+         */
+        let oem = try!(OemParameters::read_at_from(&t, offs + 512 * 9));
+        Ok(BootRegion { bs: bs, oem: oem })
+    }
+}
+
+/// A full filesystem instance. Allows access to all aspects of the filesystem.
+///
+/// TODO:
+///  - right now we allocate & read quite a bit on object creation. It would be useful (for
+///  embedded systems and others) to allow defering or avoiding allocations instead. Can we do this
+///  within the confines of our type system without too much extra overhead?
+pub struct Fs<S: ReadAt> {
+    // We probably don't need 2 copies of the boot region permenantly. The multiple copies are
+    // really only important for initial validation of the filesystem. After that point, the ones
+    // we're working with in memory will always be the same. The caveat here might be our algorithm
+    // for updating the bootsectors (or pieces thereof). Perhaps we'll need to keep a second copy
+    // around with the previous contents? not sure.
+    boot_regions: [BootRegion;2],
+    store: S,
 }
 
 impl<S: ReadAt> Fs<S> {
     pub fn from_ro(t: S) -> Result<Self, FsInitError> {
-        let bs = try!(BootSector::read_at_from(&t, 0).map_err(|e| FsInitError::BootSectorInitError(e)));
-        Ok(Fs { bs: bs, store: t })
+        // FIXME: using 512 here is wrong. We need to use either the media's sector size or the
+        // sector size from the first bootsector.
+        let br = [
+            try!(BootRegion::read_at_from(&t, 0)),
+            try!(BootRegion::read_at_from(&t, 512 * 24)),
+        ];
+
+        Ok(Fs { boot_regions: br, store: t })
     }
 
     pub fn boot_sector(&self) -> &BootSector {
-        &self.bs
+        &self.boot_regions[0].bs
     }
 
     /*
     pub fn ext_boot_sectors(&self) -> &ExtendedBootSectors {
         /* do something?? */
-    }
-    */
-
-    /*
-    pub fn oem_parameters(&self) -> OemParameters {
-
     }
     */
 }
@@ -538,24 +577,37 @@ impl Fat {
     }
 
     // TODO: consider if we can get Index to work here by abusing a '&' type.
-    pub fn entry(&self, i: usize) -> FatEntry {
-        FatEntry::from_val(self.v[2 + i])
+    pub fn entry(&self, e: FatEntry) -> FatEntry {
+        FatEntry::from_val(self.v[e.val() as usize])
     }
 }
 
+/// A single entry in a Fat. This entry describes a cluster with the same index as this entry. This
+/// structure _does not_ store that index.
+#[derive(Clone,Copy,Eq,PartialEq,Debug)]
 pub struct FatEntry {
     v: u32
 }
 
+// FIXME: we need to convert from LE at some point in here. Doing so in 'from_val' is probably the
+// best choice, and would mean we'd want to name it something like "from_raw" instead.
 impl FatEntry {
     pub fn from_val(i: u32) -> Self {
         FatEntry { v: i }
     }
 
+    /// If true, the cluster that corresponds to this FAT entry is marked as bad.
     pub fn is_bad(&self) -> bool {
         self.v == 0xFF_FF_FF_F7
     }
 
+    /// If true, the cluster that corresponds to this FAT entry is the last one in a cluster chain.
+    pub fn is_last(&self) -> bool {
+        self.v == 0xFF_FF_FF_FF
+    }
+
+    /// If not one of the exceptional cases, this is a FAT index corresponding to the next cluster
+    /// in the cluster chain.
     pub fn val(&self) -> u32 {
         self.v
     }
@@ -595,6 +647,31 @@ impl DirEntry {
 
     pub fn data_len(&self) -> u64 {
         read_num_bytes!(u64, 8, &self.v[24..])
+    }
+}
+
+/// An iterator over a cluster chain
+#[derive(Clone)]
+pub struct ClusterChain<'a> {
+    f: &'a Fat,
+    e: FatEntry,
+}
+
+impl<'a> Iterator for ClusterChain<'a> {
+    type Item = Result<FatEntry, FatEntry>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let c = self.e;
+        if c.is_last() {
+            None
+        } else {
+            self.e = self.f.entry(c);
+            if self.e.is_bad() {
+                Some(Err(c))
+            } else {
+                Some(Ok(c))
+            }
+        }
     }
 }
 
