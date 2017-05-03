@@ -633,6 +633,9 @@ pub struct DirEntry {
 impl DirEntry {
     /// 0x00 = end-of-directory, all other fields reserved
     ///        subsequent DirEntries in a Dir are also given this type
+    /// 0x01...0x7f: unused-dir-entry marker
+    /// 0x81...0xff: regular directory entry, see 'EntryType' for breakdown.
+    /// 0x80: invalid
     pub fn entry_type(&self) -> u8 {
         self.v[0]
     }
@@ -647,6 +650,29 @@ impl DirEntry {
 
     pub fn data_len(&self) -> u64 {
         read_num_bytes!(u64, 8, &self.v[24..])
+    }
+}
+
+pub struct EntryType {
+    raw: u8
+}
+
+impl EntryType {
+    pub fn type_code(&self) -> u8 {
+        self.raw & ((1 << 6) - 1)
+    }
+
+    pub fn type_importance(&self) -> u8 {
+        (self.raw >> 5) & 1
+    }
+
+    pub fn type_category(&self) -> u8 {
+        (self.raw >> 6) & 1
+    }
+
+    /// note: 0x1...0x7f, "unused-directory-entry" when this is false.
+    pub fn in_use(&self) -> bool {
+        (self.raw >> 6) & 1 != 0
     }
 }
 
