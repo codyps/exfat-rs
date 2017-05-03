@@ -5,7 +5,7 @@
  *
  * A cluster contains a fixed number (per-exfat volume, power of 2) of sectors.
  *
- * The FAT is an array of u32 entires, with each describing a cluster.
+ * The FAT is an array of u32, with each entry in the array corresponding to a cluster.
  *
  * Using FAT entries as "next pointers", the clusters are formed into chains.
  *
